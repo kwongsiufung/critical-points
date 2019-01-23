@@ -1,0 +1,204 @@
+#The following code was applied to ALSPAC data, but could be adpated for other longitudinal cohort analysis, providing there
+#are at least 4 measurements of an outcome that you want to model for a trajectory. 
+
+*For simplicity, we only run the simple unadjusted model to demonstrate how we calculated the features of the trajectories 
+*such as age of peak velocity and age of maximum depressive symptoms.
+
+*Once the data has been transformed into long format (you’ll normally have it in wide format), you can explore the data 
+*and ensure you have all the variables needed to run the actual analysis.
+
+order ///
+subject /// Participant ID
+occ /// Occasion number
+dep /// Depressive symptoms score
+age /// Age at each occasion 
+female /// The sex indicator with males (0) or females (1)
+
+*You can centre the age variable to make the interpretation easier. From here you can add your polynomials. We have added 3 
+*terms of age as this matches the analysis conducted in the manuscript, but you could include fewer/more terms, or explore 
+*other functions of age such as fractional polynomials or splines.
+
+summarize age
+generate age16 = age-15.82151
+generate age16_2 = age16^2
+generate age16_3 = age16^3
+
+*We have set males to be 0 and females to be 1, so the default age variables will represent males and the interaction 
+*between female and age will represent females.
+
+generate age16xfem = age16*female
+generate age16xfem_2 = age16_2*female
+generate age16xfem_3 = age16_3*female
+
+*Set the data to be panel.
+
+xtset subject occ
+
+*Drop the missing data, i.e., anyone without a dep score. For the sensitivity analysis, we dropped anyone with less than 3 
+*measurements (not done here).
+
+sort subject occ
+by subject: egen numocc = count(dep)
+drop if dep==. | age==.
+
+*Describe and observe the missing data patters.
+
+xtdes if dep~=.
+tab occ 
+
+*Running the cubic model in STATA with the runmlwin command that calls MLwiN. MLwiN requires a constant to be generated and a 
+*path specified in STATA. You would need to download MLwiN onto your pc first, and then install the program on stata.
+*See help runmlwin for mroe info. YOu also need to specify where MLwiN will be called from using the global command earlier.
+
+*We also want to know about model fit and correlations between our parameters so we specify additional commands. 
+*We save the estimates for use in calculating the trajectory features later.
+
+gen cons = 1
+
+global MLwiN_path C:\Program Files /// (x86)\MLwiN\v2.35\i386\MLwiN.exe
+
+sort subject age
+
+runmlwin dep cons age16 age16_2 age16_3 female age16xfem ///
+age16_2xfem age16_3xfem, ///
+level2(subject: cons age16 age16_2 age16_3) ///
+level1(age: male female, diagonal) ///
+nopause
+
+runmlwin, corr
+
+estat ic
+estimates save “unadjusted.ster”
+
+*You can calculate the male and female variance and see if they differ. You can do this by telling STATA to return the 
+*parameters that are stored in the local memory. Then take these parameters into your equations.
+
+ereturn list
+matrix list e(b)
+
+nlcom (Male_VPC_xis0: [RP2]var(cons)/([RP2]var(cons) ///
++ [RP1]var(male)))
+test [RP1]var(female) = [RP1]var(male)
+
+*You can plot the trajectories here using the predict command.
+
+predict predcub
+sort age
+line predcub age if female==1, lpattern(solid) || ///
+line predcub2 age if female==0, lpattern(dash)||, ///
+ytitle("Depressive Symptoms Score") ///
+legend(label(1 "Female (Unadjusted)") /// 
+label(2 "Male (Unadjusted)"))
+
+*You can compare the male and female trajectories using the delta method. First compare the intercepts (which are centered to 
+*approximately 16 years old).
+
+estimates use "unadjusted.ster"
+
+nlcom ///
+(male: _b[cons]) ///
+(female: _b[cons] + _b[female]) ///
+, post
+
+nlcom (difference: _b[male] - _b[female])
+
+*You can then compare sex differences for the linear, quadratic and cubic terms. 
+
+estimates use "unadjusted.ster"
+
+nlcom ///
+(male: _b[age16]) ///
+(female: _b[age16] + _b[age16xfem]) ///
+, post
+
+nlcom (difference: _b[male] - _b[female])
+
+estimates use "unadjusted.ster"
+nlcom ///
+(male: _b[age16_2]) ///
+(female: _b[age16_2] + _b[age16_2xfem]) ///
+, post
+
+nlcom (difference: _b[male] - _b[female])
+estimates use "unadjusted.ster"
+nlcom ///
+(male: _b[age16_3]) ///
+(female: _b[age16_3] + _b[age16_3xfem]) ///
+, post
+
+nlcom (difference: _b[male] - _b[female])
+
+*Calculating the age of peak velocity of depressive symptoms can be done by using the parameters stored by STATA, the mean age
+*and using supplementary equation 5.
+
+estimates use "unadjusted.ster"
+ereturn list
+matrix list e(b)
+
+nlcom ///
+(male: 15.82151 +(-_b[age16_2]/(3*_b[age16_3]))) ///
+(female: 15.82151 + (-(_b[age16_2] + ///
+_b[age16_2xfem])/(3*(_b[age16_3] ///
++ _b[age16_3xfem])))) ///
+, post
+
+nlcom (difference: _b[male] - _b[female])
+
+*Calculating the age of maximum depressive symptoms can be done by using the parameters stored by STATA, the mean age and using
+*supplementary equation 6.
+
+estimates use "unadjusted.ster"
+
+nlcom ///
+(males: (-2*_b[age16_2] ///
+- (sqrt(4*(_b[age16_2]^2) ///
+- (12*(_b[age16_3]*_b[age16]))))) ///
+/ (6*_b[age16_3]) + 15.82151) ///
+(females: (-2*(_b[age16_2]+_b[age16_2xfem]) ///
+- (sqrt((4*((_b[age16_2]^2)+(_b[age16_2xfem]^2))) ///
+- ///
+(12*(_b[age16_3]*_b[age16])+(_b[age16_3xfem]* ///
+_b[age16xfem]))))) ///
+/ (6*(_b[age16_3]+_b[age16_3xfem])) + 15.82151) ///
+, post
+
+nlcom (difference: _b[male] - _b[female])
+
+*Calculating the depressive symptoms score at the age of peak velocity of depressive symptoms can be done by using the 
+*parameters stored by STATA, the mean age subtracted *from the age of peak velocity of depressive symptoms and using 
+*supplementary equation 2.
+
+estimates use "unadjusted.ster"
+scalar tm = 16.36378 - 15.82151
+scalar tf = 13.50909 - 15.82151
+
+nlcom ///
+(male: _b[cons] + _b[age16]*tm + _b[age16_2]*tm^2 /// 
++  _b[age16_3]*tm^3) ///
+(female: _b[cons] + _b[age16]*tf + _b[age16_2]*tf^2 ///
++  _b[age16_3]*tf^3 ///
++ _b[female] + _b[age16xfem]*tf + _b[age16_2xfem]*tf^2 ///
++ _b[age16_3xfem]*tf^3) ///
+, post
+
+nlcom (difference: _b[male] - _b[female])
+
+*Calculating the depressive symptoms score at age of maximum depressive symptoms can be done by using the parameters stored by
+*STATA, the mean age subtracted from the age of *maximum depressive symptoms and using supplementary equation 2.
+
+estimates use "unadjusted.ster"
+scalar tm = 20.47192 - 15.82151
+scalar tf = 19.89151  - 15.82151
+
+nlcom ///
+(male: _b[cons] + _b[age16]*tm + _b[age16_2]*tm^2 ///
++  _b[age16_3]*tm^3) ///
+(female: _b[cons] + _b[age16]*tf + _b[age16_2]*tf^2 ///
++  _b[age16_3]*tf^3 ///
++ _b[female] + _b[age16xfem]*tf + _b[age16_2xfem]*tf^2 /// 
++ _b[age16_3xfem]*tf^3) ///
+, post
+
+nlcom (difference: _b[male] - _b[female])
+
+*If this has worked, treat yourself to a (or several) beer/wine/chocolates :D
